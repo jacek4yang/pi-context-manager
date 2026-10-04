@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { STACK_INFO } from "./info.ts";
 import { classifyItem } from "./core/classify.ts";
 import { estimateTextTokens, pressure } from "./core/estimate.ts";
-import { DEFAULT_HYGIENE_POLICY, type ContextItem } from "./core/types.ts";
+import { DEFAULT_HYGIENE_POLICY, type ContextItem, type HygienePolicy } from "./core/types.ts";
 import type { EvidenceRef } from "./core/evidence.ts";
 import { EvidenceStore } from "./evidence/store.ts";
 import { planHygiene } from "./hygiene/hygiene.ts";
@@ -30,6 +30,10 @@ export default function piContextManager(pi: ExtensionAPI) {
   let sessionId = "";
   const archivedEntryIds = new Set<string>();
   const selector = new EngineSelector([new DeterministicEngine()]);
+  // Override the recency window for demos/tests (PINX_HYGIENE_RECENT_MS=1000).
+  const policy: HygienePolicy = process.env.PINX_HYGIENE_RECENT_MS
+    ? { ...DEFAULT_HYGIENE_POLICY, recentWindowMs: Number(process.env.PINX_HYGIENE_RECENT_MS) || DEFAULT_HYGIENE_POLICY.recentWindowMs }
+    : DEFAULT_HYGIENE_POLICY;
 
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId() ?? "";
@@ -56,7 +60,15 @@ export default function piContextManager(pi: ExtensionAPI) {
       refsById.set(entry.ref.id, entry.ref);
       archivedEntryIds.add(entry.targetId);
       pi.appendEntry(STACK_INFO.customTypes.evidence, { ref: entry.ref, toolName: entry.toolName });
+      pi.events.emit("pinx.activity", {
+        v: 1,
+        kind: "context.archived",
+        summary: `Archived ${entry.toolName} output · ${entry.chars} chars`,
+        detail: { chars: entry.chars, ref: entry.ref.id, entryId: entry.targetId },
+        ts: Date.now(),
+      });
     }
+    emitContextStatus(pi, ctx);
     return {
       entries: plan.entries.map((entry) => ({
         type: "context_edit" as const,
@@ -180,7 +192,43 @@ export default function piContextManager(pi: ExtensionAPI) {
     const candidates = items
       .filter((item) => item.role === "toolResult" && item.content)
       .map((item) => ({ item, content: item.content! }));
-    return planHygiene(sessionId, candidates, store, DEFAULT_HYGIENE_POLICY);
+    return planHygiene(sessionId, candidates, store, policy);
+  }
+
+  /** Publish the pinx.context.status contract event (CONTRACTS.md §2). */
+  function emitContextStatus(
+    pi: ExtensionAPI,
+    ctx: Parameters<Parameters<ExtensionAPI["on"]>[1]>[1],
+  ): void {
+    try {
+      const projection = ctx.sessionManager.buildSessionProjection();
+      const items = projectionItems(projection);
+      let protectedTokens = 0;
+      let eligibleTokens = 0;
+      for (const item of items) {
+        const tokens = estimateTextTokens(JSON.stringify(item.content ?? "") ?? "").value;
+        if (classifyItem(item).disposition === "protected") protectedTokens += tokens;
+        else eligibleTokens += tokens;
+      }
+      const usage = ctx.getContextUsage();
+      const usedTokens =
+        usage?.tokens != null
+          ? { value: usage.tokens, source: "provider-reported" as const }
+          : { value: protectedTokens + eligibleTokens, source: "estimated" as const };
+      pi.events.emit("pinx.context.status", {
+        v: 1,
+        contextWindow: usage?.contextWindow ?? null,
+        usedTokens,
+        breakdown: [
+          { label: "protected", tokens: protectedTokens, source: "estimated" },
+          { label: "reclaimable", tokens: eligibleTokens, source: "estimated" },
+        ],
+        activeEngine: "deterministic",
+        archivedRefs: refsById.size,
+      });
+    } catch {
+      // Status emission is best-effort and must never break a turn boundary.
+    }
   }
 }
 
@@ -200,19 +248,7 @@ const MAX_INPUT_ITEM_CHARS = 400;
 
 function serializeInput(messages: ReadonlyArray<{ role: string }>): CompactionPlan["input"] {
   return messages.map((message) => {
-    const content = (message as unknown as { content?: unknown }).content;
-    const text = Array.isArray(content)
-      ? content
-          .map((block) =>
-            block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-              ? String((block as { text?: unknown }).text ?? "")
-              : "",
-          )
-          .filter((t) => t.length > 0)
-          .join("\n")
-      : typeof content === "string"
-        ? content
-        : "";
+    const text = messageText(message);
     const bounded =
       text.length > MAX_INPUT_ITEM_CHARS ? text.slice(0, MAX_INPUT_ITEM_CHARS - 1) + "…" : text;
     return {
@@ -226,16 +262,26 @@ function serializeInput(messages: ReadonlyArray<{ role: string }>): CompactionPl
   });
 }
 
+/** Extract text from any AgentMessage content shape: string, text blocks, or none. */
+function messageText(message: unknown): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) =>
+      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+        ? String((block as { text?: unknown }).text ?? "")
+        : "",
+    )
+    .filter((t) => t.length > 0)
+    .join("\n");
+}
+
 function projectionItems(projection: ProjectionLike): ItemWithContent[] {
   const items: ItemWithContent[] = [];
   for (const projected of projection.entries) {
     for (const message of projected.messages) {
-      const withContent = message as unknown as {
-        content?: Array<{ type: string; text?: string }>;
-      };
-      const textBlocks =
-        withContent.content?.filter((b) => b.type === "text" && typeof b.text === "string") ?? [];
-      const content = textBlocks.map((b) => b.text).join("\n");
+      const content = messageText(message);
       items.push({
         entryId: projected.sourceEntry.id,
         role: message.role,
