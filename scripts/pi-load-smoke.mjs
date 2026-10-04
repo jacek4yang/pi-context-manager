@@ -26,6 +26,7 @@ const loader = new DefaultResourceLoader({
     (pi) => {
       pi.on("session_start", () => {
         probe.commands = pi.getCommands().map((c) => c.name);
+        probe.tools = pi.getAllTools().map((t) => t.name);
       });
     },
   ],
@@ -49,7 +50,12 @@ try {
     probe.commands.includes("context-manager"),
     `context-manager command missing; got ${JSON.stringify(probe.commands)}`,
   );
+  assert.ok(
+    Array.isArray(probe.tools) && probe.tools.includes("pinx_recall"),
+    `pinx_recall tool missing; got ${JSON.stringify(probe.tools)}`,
+  );
   console.log(`pi-load-smoke: commands visible: ${probe.commands.join(", ")}`);
+  console.log(`pi-load-smoke: tools registered include pinx_recall`);
 } finally {
   session.dispose();
   rmSync(tempAgentDir, { recursive: true, force: true });
