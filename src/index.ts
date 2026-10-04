@@ -235,7 +235,7 @@ export default function piContextManager(pi: ExtensionAPI) {
 interface ProjectionLike {
   entries: Array<{
     sourceEntry: { id: string };
-    messages: Array<{ role: string; toolName?: string; isError?: boolean }>;
+    messages: Array<{ role: string; toolName?: string; isError?: boolean; timestamp?: number }>;
   }>;
   messages: unknown[];
 }
@@ -287,6 +287,7 @@ function projectionItems(projection: ProjectionLike): ItemWithContent[] {
         role: message.role,
         toolName: message.toolName,
         isError: message.isError,
+        ts: message.timestamp,
         chars: JSON.stringify(message)?.length ?? 0,
         content,
       });
