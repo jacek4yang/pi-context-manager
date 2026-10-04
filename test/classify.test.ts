@@ -107,3 +107,15 @@ test("evidence markers round-trip", () => {
   assert.equal(parsed.ref, "ev_01H");
   assert.equal(parseMarker("not a marker"), undefined);
 });
+
+test("operator-declared extra archivable tools extend the allowlist explicitly", () => {
+  const policy = {
+    ...DEFAULT_HYGIENE_POLICY,
+    archivableTools: new Set([...DEFAULT_HYGIENE_POLICY.archivableTools, "ffgrep"]),
+  };
+  const c = classifyItem(item({ toolName: "ffgrep", ts: OLD }), policy, NOW);
+  assert.equal(c.disposition, "eligible");
+  // Without the declaration the same tool stays protected (fail-safe default).
+  const strict = classifyItem(item({ toolName: "ffgrep", ts: OLD }), DEFAULT_HYGIENE_POLICY, NOW);
+  assert.equal(strict.disposition, "protected");
+});

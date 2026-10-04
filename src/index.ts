@@ -30,10 +30,22 @@ export default function piContextManager(pi: ExtensionAPI) {
   let sessionId = "";
   const archivedEntryIds = new Set<string>();
   const selector = new EngineSelector([new DeterministicEngine()]);
-  // Override the recency window for demos/tests (PINX_HYGIENE_RECENT_MS=1000).
-  const policy: HygienePolicy = process.env.PINX_HYGIENE_RECENT_MS
-    ? { ...DEFAULT_HYGIENE_POLICY, recentWindowMs: Number(process.env.PINX_HYGIENE_RECENT_MS) || DEFAULT_HYGIENE_POLICY.recentWindowMs }
-    : DEFAULT_HYGIENE_POLICY;
+  // Policy overrides for demos/tests and explicit operator declarations:
+  //   PINX_HYGIENE_RECENT_MS  — recency window (default 30 min)
+  //   PINX_HYGIENE_ARCHIVABLE — comma list of EXTRA read-only tool names.
+  //     Fail-safe default: unknown tools are never archivable; operators must
+  //     declare third-party read-only tools (e.g. fff's "ffgrep") explicitly.
+  const extraArchivable = (process.env.PINX_HYGIENE_ARCHIVABLE ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const policy: HygienePolicy = {
+    ...DEFAULT_HYGIENE_POLICY,
+    recentWindowMs: process.env.PINX_HYGIENE_RECENT_MS
+      ? Number(process.env.PINX_HYGIENE_RECENT_MS) || DEFAULT_HYGIENE_POLICY.recentWindowMs
+      : DEFAULT_HYGIENE_POLICY.recentWindowMs,
+    archivableTools: new Set([...DEFAULT_HYGIENE_POLICY.archivableTools, ...extraArchivable]),
+  };
 
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId() ?? "";
