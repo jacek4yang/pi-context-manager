@@ -10,14 +10,18 @@ import type { EvidenceRef } from "./core/evidence.ts";
 import { EvidenceStore } from "./evidence/store.ts";
 import { planHygiene } from "./hygiene/hygiene.ts";
 import { createRecallTool } from "./recall/tool.ts";
+import { DeterministicEngine } from "./engines/deterministic.ts";
+import { CompactionCancelled, EngineSelector, NoEngineError } from "./engines/selector.ts";
+import type { CompactionPlan, RuntimeContext } from "./core/types.ts";
 
 /**
  * pi-context-manager — experimental context management and session continuity.
  *
- * feat/hygiene-recall: deterministic hygiene plans committed as Pi-native
- * context_edit drafts at turn boundaries, a bounded content-verified evidence
- * store, and the pinx_recall retrieval tool. Canonical history is never
- * deleted: originals stay in session JSONL and in the evidence store (C1/C2).
+ * feat/provider-native-engine: pluggable compaction engines behind the
+ * probe→plan→compact contract. The default chain is deterministic (zero-model);
+ * provider-native engines are injected via createProviderNativeEngine and are
+ * never faked — an unsupported probe falls back, an all-engine failure cancels
+ * compaction with state preserved (C8/C9/C10/C11).
  */
 export default function piContextManager(pi: ExtensionAPI) {
   const enabled = process.env.PINX_HYGIENE !== "off";
@@ -25,6 +29,7 @@ export default function piContextManager(pi: ExtensionAPI) {
   const refsById = new Map<string, EvidenceRef>();
   let sessionId = "";
   const archivedEntryIds = new Set<string>();
+  const selector = new EngineSelector([new DeterministicEngine()]);
 
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId() ?? "";
@@ -59,6 +64,73 @@ export default function piContextManager(pi: ExtensionAPI) {
         replacement: { content: [{ type: "text" as const, text: entry.replacement }] },
       })),
     };
+  });
+
+  // Compaction engines (Layer 6). We never fabricate a provider-native
+  // summary: unsupported probes fall back down the chain, and an all-engine
+  // failure cancels compaction with the previous usable state preserved (C8).
+  pi.on("session_before_compact", async (event, ctx) => {
+    if (!enabled || !sessionId) return undefined;
+    const preparation = event.preparation;
+    const input = serializeInput(preparation.messagesToSummarize);
+    const candidates = preparation.messagesToSummarize.map((message, index) => ({
+      entryId: `m${index}`,
+      role: message.role,
+      toolName:
+        message.role === "toolResult" ? (message as { toolName?: string }).toolName : undefined,
+      isError:
+        message.role === "toolResult" ? (message as { isError?: boolean }).isError : undefined,
+      chars: JSON.stringify(message)?.length ?? 0,
+    }));
+    const runtime: RuntimeContext = {
+      sessionId,
+      leafId: ctx.sessionManager.getLeafId() ?? "",
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+      tokensUsed:
+        ctx.getContextUsage()?.tokens != null
+          ? { value: ctx.getContextUsage()!.tokens!, source: "provider-reported" }
+          : undefined,
+      contextWindow: ctx.getContextUsage()?.contextWindow,
+      signal: event.signal,
+    };
+    try {
+      const outcome = await selector.run(
+        runtime,
+        candidates,
+        input,
+        preparation.firstKeptEntryId,
+        event.signal,
+      );
+      return {
+        compaction: {
+          summary: outcome.result.summary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: {
+            engine: outcome.result.engine,
+            attempts: outcome.attempts,
+            nativeCheckpoint: outcome.result.details.nativeCheckpoint,
+          },
+        },
+      };
+    } catch (error) {
+      const reason =
+        error instanceof CompactionCancelled
+          ? "cancelled"
+          : error instanceof NoEngineError
+            ? "all engines failed"
+            : "engine error";
+      pi.appendEntry(STACK_INFO.customTypes.summary, {
+        kind: "compaction-failed",
+        reason,
+        detail: (error as Error).message,
+      });
+      await ctx.ui.notify(
+        `context-manager: compaction cancelled (${reason}); previous context preserved`,
+        "warning",
+      );
+      return { cancel: true };
+    }
   });
 
   pi.registerTool(
@@ -122,6 +194,36 @@ interface ProjectionLike {
 
 interface ItemWithContent extends ContextItem {
   content?: string;
+}
+
+const MAX_INPUT_ITEM_CHARS = 400;
+
+function serializeInput(messages: ReadonlyArray<{ role: string }>): CompactionPlan["input"] {
+  return messages.map((message) => {
+    const content = (message as unknown as { content?: unknown }).content;
+    const text = Array.isArray(content)
+      ? content
+          .map((block) =>
+            block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+              ? String((block as { text?: unknown }).text ?? "")
+              : "",
+          )
+          .filter((t) => t.length > 0)
+          .join("\n")
+      : typeof content === "string"
+        ? content
+        : "";
+    const bounded =
+      text.length > MAX_INPUT_ITEM_CHARS ? text.slice(0, MAX_INPUT_ITEM_CHARS - 1) + "…" : text;
+    return {
+      role: message.role,
+      toolName:
+        message.role === "toolResult" ? (message as { toolName?: string }).toolName : undefined,
+      isError:
+        message.role === "toolResult" ? (message as { isError?: boolean }).isError : undefined,
+      text: bounded,
+    };
+  });
 }
 
 function projectionItems(projection: ProjectionLike): ItemWithContent[] {
