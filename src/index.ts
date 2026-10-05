@@ -80,7 +80,10 @@ export default function piContextManager(pi: ExtensionAPI) {
       model: ctx.model?.id,
     };
     const { checkpoint, skipped } = restoreCheckpoint(
-      branch.map((e) => ({ customType: (e as { customType?: string }).customType ?? "", data: (e as { data?: unknown }).data })),
+      branch.map((e) => ({
+        customType: (e as { customType?: string }).customType ?? "",
+        data: (e as { data?: unknown }).data,
+      })),
       identity,
       STACK_INFO.customTypes.generation,
     );
@@ -110,7 +113,9 @@ export default function piContextManager(pi: ExtensionAPI) {
     const plan = await buildPlan(ctx.sessionManager);
     if (plan.entries.length === 0) return undefined;
     generation++;
-    generationIdentity = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
+    generationIdentity = ctx.model
+      ? { provider: ctx.model.provider, model: ctx.model.id }
+      : undefined;
     const checkpoint: CheckpointData = {
       v: 1,
       generation,

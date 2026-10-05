@@ -6,7 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { restoreCheckpoint, validateCheckpoint, CHECKPOINT_HISTORY, type CheckpointData } from "../src/continuity/checkpoint.ts";
+import {
+  restoreCheckpoint,
+  validateCheckpoint,
+  CHECKPOINT_HISTORY,
+  type CheckpointData,
+} from "../src/continuity/checkpoint.ts";
 import { STACK_INFO } from "../src/info.ts";
 import { createMockPiCm } from "./helpers/mock-pi-cm.ts";
 
@@ -129,7 +134,10 @@ function branchFrom(h: ReturnType<typeof createMockPiCm>) {
 function generationFromBus(h: ReturnType<typeof createMockPiCm>): number | undefined {
   for (let i = h.busLog.length - 1; i >= 0; i--) {
     const e = h.busLog[i]!;
-    if (e.channel === "pinx.activity" && (e.payload as { kind?: string }).kind === "context.checkpoint") {
+    if (
+      e.channel === "pinx.activity" &&
+      (e.payload as { kind?: string }).kind === "context.checkpoint"
+    ) {
       return (e.payload as { detail: { generation: number } }).detail.generation;
     }
   }
@@ -142,7 +150,9 @@ test("[C16] reopen: hygiene commit persists checkpoint → new instance restores
   h1.setProjectionFixture(grepProjectionFixture());
   await h1.dispatch("session_start", { reason: "startup" });
   await h1.dispatch("turn_end", {}, {});
-  const checkpoints = h1.appendedEntries.filter((e) => e.customType === STACK_INFO.customTypes.generation);
+  const checkpoints = h1.appendedEntries.filter(
+    (e) => e.customType === STACK_INFO.customTypes.generation,
+  );
   assert.equal(checkpoints.length, 1, "generation checkpoint persisted on hygiene commit");
 
   // Session 2: reopen — replay the SAME branch entries into a NEW instance
@@ -153,7 +163,9 @@ test("[C16] reopen: hygiene commit persists checkpoint → new instance restores
   await h2.dispatch("session_start", { reason: "resume" });
   const generation = generationFromBus(h2);
   assert.ok(generation !== undefined && generation >= 1, "generation restored from checkpoint");
-  const notice = h2.busLog.filter((e) => e.channel === "pinx.activity").at(-1)!.payload as { summary: string };
+  const notice = h2.busLog.filter((e) => e.channel === "pinx.activity").at(-1)!.payload as {
+    summary: string;
+  };
   assert.match(notice.summary, /1 evidence refs/);
   h1.cleanup();
   h2.cleanup();
@@ -188,7 +200,9 @@ test("[C16] checkpoint is not persisted without a hygiene commit", async () => {
   await h.dispatch("session_start", { reason: "startup" });
   await h.dispatch("turn_end", {}, {});
   console.log("DBG179:", JSON.stringify(h.appendedEntries));
-  const checkpoints = h.appendedEntries.filter((e) => e.customType === STACK_INFO.customTypes.generation);
+  const checkpoints = h.appendedEntries.filter(
+    (e) => e.customType === STACK_INFO.customTypes.generation,
+  );
   assert.equal(checkpoints.length, 0, "empty hygiene plan → no checkpoint entry");
   h.cleanup();
 });

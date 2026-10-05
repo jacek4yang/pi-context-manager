@@ -17,7 +17,16 @@ export interface MockCtx {
     getLeafId: () => string | undefined;
     getBranch: () => Array<{ type: string; id: string; customType?: string; data?: unknown }>;
     buildSessionProjection: () => {
-      entries: Array<{ sourceEntry: { id: string }; messages: Array<{ role: string; toolName?: string; isError?: boolean; timestamp?: number; content?: Array<{ type: string; text?: string }> }> }>;
+      entries: Array<{
+        sourceEntry: { id: string };
+        messages: Array<{
+          role: string;
+          toolName?: string;
+          isError?: boolean;
+          timestamp?: number;
+          content?: Array<{ type: string; text?: string }>;
+        }>;
+      }>;
       messages: Array<unknown>;
     };
   };
@@ -40,7 +49,16 @@ export function createMockPiCm(sessionId?: string) {
   let tools: string[] = ["read", "grep"];
   let sessionFixture: Array<{ type: string; id: string; customType?: string; data?: unknown }> = [];
   let projectionFixture: {
-    entries: Array<{ sourceEntry: { id: string }; messages: Array<{ role: string; toolName?: string; isError?: boolean; timestamp?: number; content?: Array<{ type: string; text?: string }> }> }>;
+    entries: Array<{
+      sourceEntry: { id: string };
+      messages: Array<{
+        role: string;
+        toolName?: string;
+        isError?: boolean;
+        timestamp?: number;
+        content?: Array<{ type: string; text?: string }>;
+      }>;
+    }>;
     messages: Array<unknown>;
   } = { entries: [], messages: [] };
   let modelOverride: MockModel | undefined;
@@ -55,7 +73,11 @@ export function createMockPiCm(sessionId?: string) {
     model: modelOverride ? { ...modelOverride } : { provider: "intern", id: "glm-5.3" },
     thinkingLevel: undefined,
     getContextUsage: () => undefined,
-    ui: { notify: async (message: string) => { notifications.push(message); } },
+    ui: {
+      notify: async (message: string) => {
+        notifications.push(message);
+      },
+    },
     ...over,
   });
 

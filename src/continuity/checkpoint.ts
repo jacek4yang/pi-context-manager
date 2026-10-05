@@ -34,13 +34,15 @@ export function validateCheckpoint(
   data: unknown,
   identity: CheckpointIdentity,
 ): { ok: true; data: CheckpointData } | { ok: false; reason: string } {
-  if (typeof data !== "object" || data === null) return { ok: false, reason: "checkpoint data is not an object" };
+  if (typeof data !== "object" || data === null)
+    return { ok: false, reason: "checkpoint data is not an object" };
   const c = data as Partial<CheckpointData>;
   if (c.v !== 1) return { ok: false, reason: "checkpoint schema version mismatch" };
   if (typeof c.generation !== "number" || !Number.isInteger(c.generation) || c.generation < 0) {
     return { ok: false, reason: "checkpoint generation invalid" };
   }
-  if (c.sessionId !== identity.sessionId) return { ok: false, reason: "checkpoint sessionId mismatch" };
+  if (c.sessionId !== identity.sessionId)
+    return { ok: false, reason: "checkpoint sessionId mismatch" };
   // Provider/model mismatch: the checkpoint is stale for this identity —
   // not restored (stale staged work must not be reused across switches).
   if (c.provider !== identity.provider || c.model !== identity.model) {
@@ -61,9 +63,7 @@ export function restoreCheckpoint(
   customType: string,
 ): { checkpoint: CheckpointData | undefined; skipped: Array<{ reason: string }> } {
   const skipped: Array<{ reason: string }> = [];
-  const candidates = entries
-    .filter((e) => e.customType === customType)
-    .slice(-CHECKPOINT_HISTORY);
+  const candidates = entries.filter((e) => e.customType === customType).slice(-CHECKPOINT_HISTORY);
   let checkpoint: CheckpointData | undefined;
   for (const entry of candidates) {
     const result = validateCheckpoint(entry.data, identity);
