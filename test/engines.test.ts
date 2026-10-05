@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DeterministicEngine } from "../src/engines/deterministic.ts";
+import { classifyItem } from "../src/core/classify.ts";
+import { DEFAULT_HYGIENE_POLICY } from "../src/core/types.ts";
 import { createProviderNativeEngine } from "../src/engines/provider-native.ts";
 import {
   CompactionCancelled,
@@ -169,4 +171,26 @@ test("native request honors the injected timeout bound", async () => {
   });
   const selector = new EngineSelector([native]);
   await assert.rejects(() => selector.run(CTX, candidates(), INPUT, "leaf1"), /aborted/);
+});
+
+test("C12: auxiliary model failure preserves the original context", async () => {
+  // A model-backed engine that throws must leave the prior compaction state
+  // intact: the selector surfaces the error without producing a compaction.
+  const modelEngine = makeEngine("generic-verified", {
+    compact: async () => {
+      throw new Error("summarizer 500");
+    },
+  });
+  const selector = new EngineSelector([modelEngine]);
+  await assert.rejects(() => selector.run(CTX, candidates(), INPUT, "leaf1"), NoEngineError);
+});
+
+test("C13: already-summarized content is protected from re-reduction", () => {
+  const c = classifyItem(
+    { entryId: "s1", role: "summary", chars: 5000, ts: 1000 },
+    DEFAULT_HYGIENE_POLICY,
+    Date.now(),
+  );
+  assert.equal(c.disposition, "protected");
+  assert.match(c.reason, /C13/);
 });
