@@ -10,6 +10,7 @@ import type { EvidenceRef } from "./core/evidence.ts";
 import { EvidenceStore } from "./evidence/store.ts";
 import { planHygiene } from "./hygiene/hygiene.ts";
 import { createRecallTool } from "./recall/tool.ts";
+import { restoreCheckpoint, type CheckpointData } from "./continuity/checkpoint.ts";
 import { DeterministicEngine } from "./engines/deterministic.ts";
 import { CompactionCancelled, EngineSelector, NoEngineError } from "./engines/selector.ts";
 import type { CompactionPlan, RuntimeContext } from "./core/types.ts";
@@ -30,6 +31,12 @@ export default function piContextManager(pi: ExtensionAPI) {
   let sessionId = "";
   const archivedEntryIds = new Set<string>();
   const selector = new EngineSelector([new DeterministicEngine()]);
+  /** Context-management generation: incremented on every committed hygiene
+   * batch; restored from the latest valid checkpoint on reopen (C16). */
+  let generation = 0;
+  /** Provider/model the generation was committed under — a switch
+   * invalidates the restored continuity rather than reusing it blindly. */
+  let generationIdentity: { provider: string; model: string } | undefined;
   // Policy overrides for demos/tests and explicit operator declarations:
   //   PINX_HYGIENE_RECENT_MS  — recency window (default 30 min)
   //   PINX_HYGIENE_ARCHIVABLE — comma list of EXTRA read-only tool names.
@@ -53,7 +60,8 @@ export default function piContextManager(pi: ExtensionAPI) {
     archivedEntryIds.clear();
     // Rebuild branch-sensitive state from persisted custom entries only —
     // never by scanning raw history of abandoned branches.
-    for (const entry of ctx.sessionManager.getBranch()) {
+    const branch = ctx.sessionManager.getBranch();
+    for (const entry of branch) {
       if (entry.type === "custom" && entry.customType === STACK_INFO.customTypes.evidence) {
         const ref = (entry.data as { ref?: EvidenceRef } | undefined)?.ref;
         if (ref && ref.v === 1) {
@@ -62,12 +70,58 @@ export default function piContextManager(pi: ExtensionAPI) {
         }
       }
     }
+    // C16: restore continuity generation from the latest VALID checkpoint.
+    // Identity mismatch (provider/model) leaves the generation unset rather
+    // than reusing staged state across switches; corrupt checkpoints fail
+    // closed individually; canonical history is never touched.
+    const identity = {
+      sessionId,
+      provider: ctx.model?.provider,
+      model: ctx.model?.id,
+    };
+    const { checkpoint, skipped } = restoreCheckpoint(
+      branch.map((e) => ({ customType: (e as { customType?: string }).customType ?? "", data: (e as { data?: unknown }).data })),
+      identity,
+      STACK_INFO.customTypes.generation,
+    );
+    void skipped;
+    if (checkpoint) {
+      generation = checkpoint.generation;
+      generationIdentity = { provider: checkpoint.provider ?? "", model: checkpoint.model ?? "" };
+      try {
+        pi.events.emit("pinx.activity", {
+          v: 1,
+          kind: "context.checkpoint",
+          summary: `Continuity restored: generation ${generation}, ${refsById.size} evidence refs`,
+          detail: { generation },
+          ts: Date.now(),
+        });
+      } catch {
+        // observability is best-effort
+      }
+    } else {
+      generation = 0;
+      generationIdentity = undefined;
+    }
   });
 
   pi.on("turn_end", async (_event, ctx) => {
     if (!enabled || !sessionId) return undefined;
     const plan = await buildPlan(ctx.sessionManager);
     if (plan.entries.length === 0) return undefined;
+    generation++;
+    generationIdentity = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
+    const checkpoint: CheckpointData = {
+      v: 1,
+      generation,
+      sessionId,
+      atEntryId: ctx.sessionManager.getLeafId() ?? "",
+      provider: ctx.model?.provider,
+      model: ctx.model?.id,
+      evidenceIds: plan.entries.map((e) => e.ref.id),
+      createdAt: new Date().toISOString(),
+    };
+    pi.appendEntry(STACK_INFO.customTypes.generation, checkpoint);
     for (const entry of plan.entries) {
       refsById.set(entry.ref.id, entry.ref);
       archivedEntryIds.add(entry.targetId);
@@ -193,6 +247,7 @@ export default function piContextManager(pi: ExtensionAPI) {
           `pi-context-manager ${STACK_INFO.contractVersion} · recover before summarize, summarize before discard`,
           `messages: ${items.length} · ~${est.value} tokens (estimated)${ratio !== undefined ? ` · pressure ${(ratio * 100).toFixed(0)}%` : ""}`,
           `protected ${dispositions.protected} · eligible ${dispositions.eligible} · archived refs ${refsById.size}`,
+          `generation ${generation}${generationIdentity ? ` @ ${generationIdentity.provider}/${generationIdentity.model}` : ""}`,
         ].join("\n"),
         "info",
       );

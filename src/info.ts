@@ -6,6 +6,7 @@ export const STACK_INFO = {
   /** customType namespace for custom entries/messages (never reuse stable-stack ids). */
   customTypes: {
     checkpoint: "pinx.context.checkpoint",
+    generation: "pinx.context.generation",
     summary: "pinx.context.summary",
     evidence: "pinx.context.evidence",
   },
