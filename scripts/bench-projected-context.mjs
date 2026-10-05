@@ -42,8 +42,22 @@ for (let t = 1; t <= TURNS; t++) {
 }
 const base = baselineTurns[baselineTurns.length - 1];
 const treat = treatedTurns[treatedTurns.length - 1];
-console.log(`turns=${TURNS} output=${OUTPUT_CHARS} chars/turn (est tokens)`);
-console.log(`baseline final ctx: ${base} tok | treated final ctx: ${treat} tok | reduction: ${(100 * (1 - treat / base)).toFixed(1)}%`);
-console.log("baseline traj:", baselineTurns.join(","));
-console.log("treated  traj:", treatedTurns.join(","));
+// HONEST METRICS: these are PROJECTED-CONTEXT sizes estimated at chars/4.
+// They are NOT provider billing tokens and must never be reported as such.
+console.log(JSON.stringify({
+  benchmark: "projected-context microbenchmark (synthetic)",
+  assumptions: [
+    "token figures = visible chars / 4 (estimated, not provider-reported)",
+    "hygiene archives every turn older than the 60s window",
+    "no model calls; deterministic fixture",
+  ],
+  turn_count: TURNS,
+  tool_output_chars: OUTPUT_CHARS,
+  baseline_projected_chars: base * 4,
+  treated_projected_chars: treat * 4,
+  estimated_tokens_char4: { baseline: base, treated: treat },
+  reduction_percent: Number((100 * (1 - treat / base)).toFixed(1)),
+  baseline_trajectory_est_tokens: baselineTurns,
+  treated_trajectory_est_tokens: treatedTurns,
+}, null, 2));
 rmSync(dir, { recursive: true, force: true });
