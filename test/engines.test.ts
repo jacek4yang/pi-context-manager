@@ -72,7 +72,7 @@ test("deterministic engine records tool evidence and errors without a model (C6)
   assert.equal(result.details.nativeCheckpoint, undefined);
 });
 
-test("probe-unsupported engines are skipped and the next engine applies (C11)", async () => {
+test("[C11] probe-unsupported engines are skipped and the next engine applies (C11)", async () => {
   const native = createProviderNativeEngine({
     probe: () => ({ supported: false, reason: "provider api lacks native compaction" }),
     request: async () => {
@@ -89,7 +89,7 @@ test("probe-unsupported engines are skipped and the next engine applies (C11)", 
   );
 });
 
-test("an engine error falls through to the next engine (C8)", async () => {
+test("[C8] an engine error falls through to the next engine (C8)", async () => {
   const failing = makeEngine("hybrid", {
     compact: async () => {
       throw new Error("engine exploded");
@@ -101,7 +101,7 @@ test("an engine error falls through to the next engine (C8)", async () => {
   assert.deepEqual(outcome.attempts[0]!.outcome, "error");
 });
 
-test("cancellation never commits a partial result (C9)", async () => {
+test("[C9] cancellation never commits a partial result (C9)", async () => {
   const aborter = new AbortController();
   const slow = makeEngine("hybrid", {
     compact: async (plan) => {
@@ -118,7 +118,7 @@ test("cancellation never commits a partial result (C9)", async () => {
   );
 });
 
-test("a native engine that returns an empty summary is refused, never faked", async () => {
+test("[C11] a native engine that returns an empty summary is refused, never faked", async () => {
   const native = createProviderNativeEngine({
     probe: () => ({ supported: true }),
     request: async () => ({ summary: "", checkpoint: { encrypted: true } }),
@@ -142,7 +142,7 @@ test("when every engine fails the selector refuses and state is preserved", asyn
   await assert.rejects(() => selector.run(CTX, candidates(), INPUT, "leaf1"), NoEngineError);
 });
 
-test("staged compaction is invalidated by a model switch (C10)", () => {
+test("[C10] staged compaction is invalidated by a model switch (C10)", () => {
   const staged = new StagedCompaction<{ plan: string }>();
   staged.stage("s1", "provider-a/model-1", { plan: "p1" });
   assert.deepEqual(staged.take("s1", "provider-a/model-1"), { plan: "p1" });
@@ -173,7 +173,7 @@ test("native request honors the injected timeout bound", async () => {
   await assert.rejects(() => selector.run(CTX, candidates(), INPUT, "leaf1"), /aborted/);
 });
 
-test("C12: auxiliary model failure preserves the original context", async () => {
+test("[C12] C12: auxiliary model failure preserves the original context", async () => {
   // A model-backed engine that throws must leave the prior compaction state
   // intact: the selector surfaces the error without producing a compaction.
   const modelEngine = makeEngine("generic-verified", {
@@ -185,7 +185,7 @@ test("C12: auxiliary model failure preserves the original context", async () => 
   await assert.rejects(() => selector.run(CTX, candidates(), INPUT, "leaf1"), NoEngineError);
 });
 
-test("C13: already-summarized content is protected from re-reduction", () => {
+test("[C13] C13: already-summarized content is protected from re-reduction", () => {
   const c = classifyItem(
     { entryId: "s1", role: "summary", chars: 5000, ts: 1000 },
     DEFAULT_HYGIENE_POLICY,

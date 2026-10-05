@@ -26,7 +26,7 @@ test("user/system/assistant content is always protected", () => {
   }
 });
 
-test("error tool results are never eligible (C6)", () => {
+test("[C6] error tool results are never eligible (C6)", () => {
   const c = classifyItem(item({ toolName: "read", isError: true }), DEFAULT_HYGIENE_POLICY, NOW);
   assert.equal(c.disposition, "protected");
   assert.ok(c.reason.includes("C6"));
@@ -52,7 +52,7 @@ test("old successful read-only output is eligible", () => {
   }
 });
 
-test("recent work stays protected (C5)", () => {
+test("[C5] recent work stays protected (C5)", () => {
   const c = classifyItem(item({ toolName: "read", ts: RECENT }), DEFAULT_HYGIENE_POLICY, NOW);
   assert.equal(c.disposition, "protected");
   assert.ok(c.reason.includes("C5"));
@@ -98,7 +98,7 @@ test("pressure is undefined without a window and clamped otherwise", () => {
   assert.equal(pressure(providerTokens(999_999), 272_000), 1);
 });
 
-test("evidence markers round-trip", () => {
+test("[C1] evidence markers round-trip", () => {
   const line = formatMarker({ kind: "bash", chars: 18432, ref: "ev_01H", head: "$ npm test" });
   assert.ok(line.startsWith("[Archived bash output · 18432 chars · ref ev_01H]"));
   const parsed = parseMarker(line)!;
