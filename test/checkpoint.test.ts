@@ -259,7 +259,7 @@ test("[C16] crash after evidence before checkpoint restores N-1 refs consistentl
 
 test("[C16] checkpoint never claims evidence that was not persisted (invariant over replay)", () => {
   const h = harness();
-  const branch = [
+  const branch: Array<{ type: string; id: string; customType: string; data: unknown }> = [
     {
       type: "custom",
       id: "c0",
