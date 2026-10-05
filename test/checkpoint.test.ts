@@ -49,7 +49,7 @@ test("[C16] corrupt newest checkpoint falls back to the next-newest valid one", 
   assert.equal(skipped.length, 1);
 });
 
-test("[C16] session provenance mismatch is rejected (fail closed)", () => {
+test("[C4] session provenance mismatch is rejected (fail closed)", () => {
   const result = validateCheckpoint(checkpoint({ sessionId: "other-session" }), identity);
   assert.equal(result.ok, false);
   assert.match((result as { reason: string }).reason, /sessionId mismatch/);
@@ -61,7 +61,7 @@ test("[C16] model/provider mismatch invalidates restored state (stale staged wor
   assert.match((result as { reason: string }).reason, /provider\/model mismatch/);
 });
 
-test("[C16] checkpoint storage remains bounded (history cap)", () => {
+test("[C15] checkpoint storage remains bounded (history cap)", () => {
   const entries = Array.from({ length: CHECKPOINT_HISTORY + 10 }, (_, i) => ({
     customType: CT,
     data: checkpoint({ generation: i }),
@@ -75,7 +75,7 @@ test("[C16] empty/new session has no checkpoint and restores nothing", () => {
   assert.equal(cp, undefined);
 });
 
-test("[C16] checkpoint carries references, not canonical evidence content", () => {
+test("[C1] checkpoint carries references, not canonical evidence content", () => {
   const cp = checkpoint();
   assert.deepEqual(cp.evidenceIds, ["ev_a"]);
   const serialized = JSON.stringify(cp);
