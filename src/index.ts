@@ -112,6 +112,22 @@ export default function piContextManager(pi: ExtensionAPI) {
     if (!enabled || !sessionId) return undefined;
     const plan = await buildPlan(ctx.sessionManager);
     if (plan.entries.length === 0) return undefined;
+    // C16 commit ordering: evidence entries are persisted FIRST and the
+    // generation checkpoint LAST — the checkpoint is a commit marker for
+    // state that is already durable. A crash before the checkpoint leaves
+    // generation N-1 in charge, claiming nothing about generation N.
+    for (const entry of plan.entries) {
+      refsById.set(entry.ref.id, entry.ref);
+      archivedEntryIds.add(entry.targetId);
+      pi.appendEntry(STACK_INFO.customTypes.evidence, { ref: entry.ref, toolName: entry.toolName });
+      pi.events.emit("pinx.activity", {
+        v: 1,
+        kind: "context.archived",
+        summary: `Archived ${entry.toolName} output · ${entry.chars} chars`,
+        detail: { chars: entry.chars, ref: entry.ref.id, entryId: entry.targetId },
+        ts: Date.now(),
+      });
+    }
     generation++;
     generationIdentity = ctx.model
       ? { provider: ctx.model.provider, model: ctx.model.id }
@@ -127,18 +143,6 @@ export default function piContextManager(pi: ExtensionAPI) {
       createdAt: new Date().toISOString(),
     };
     pi.appendEntry(STACK_INFO.customTypes.generation, checkpoint);
-    for (const entry of plan.entries) {
-      refsById.set(entry.ref.id, entry.ref);
-      archivedEntryIds.add(entry.targetId);
-      pi.appendEntry(STACK_INFO.customTypes.evidence, { ref: entry.ref, toolName: entry.toolName });
-      pi.events.emit("pinx.activity", {
-        v: 1,
-        kind: "context.archived",
-        summary: `Archived ${entry.toolName} output · ${entry.chars} chars`,
-        detail: { chars: entry.chars, ref: entry.ref.id, entryId: entry.targetId },
-        ts: Date.now(),
-      });
-    }
     emitContextStatus(pi, ctx);
     return {
       entries: plan.entries.map((entry) => ({
@@ -297,6 +301,7 @@ export default function piContextManager(pi: ExtensionAPI) {
         ],
         activeEngine: "deterministic",
         archivedRefs: refsById.size,
+        generation,
       });
     } catch {
       // Status emission is best-effort and must never break a turn boundary.

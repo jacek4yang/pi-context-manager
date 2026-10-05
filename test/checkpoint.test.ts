@@ -206,3 +206,81 @@ test("[C16] checkpoint is not persisted without a hygiene commit", async () => {
   assert.equal(checkpoints.length, 0, "empty hygiene plan → no checkpoint entry");
   h.cleanup();
 });
+
+test("[C16] crash after evidence before checkpoint restores N-1 refs consistently (ordering)", async () => {
+  // Simulated on-disk state produced by a crash between evidence persistence
+  // and the generation checkpoint: evidence entries exist, the newest
+  // checkpoint is the PREVIOUS generation and references only ITS OWN ids.
+  const h = harness();
+  const sid = h.sessionId;
+  const ev = (id: string, entryId: string, bytes: number) => ({
+    type: "custom",
+    id: `c-${id}`,
+    customType: STACK_INFO.customTypes.evidence,
+    data: {
+      ref: {
+        v: 1 as const,
+        id,
+        sessionId: sid,
+        entryId,
+        sha256: "a".repeat(64),
+        bytes,
+        createdAt: "t",
+      },
+    },
+  });
+  const branch = [
+    {
+      type: "custom",
+      id: "c0",
+      customType: STACK_INFO.customTypes.generation,
+      data: checkpoint({ generation: 1, sessionId: sid, evidenceIds: ["ev_old"] }),
+    },
+    ev("ev_old", "e0", 10),
+    ev("ev_new", "e1", 20),
+    // NO generation-2 checkpoint: the crash happened before it.
+  ];
+  h.setSessionFixture(branch);
+  await h.dispatch("session_start", { reason: "resume" });
+  // Restoration is consistent: generation comes from the last VALID
+  // checkpoint (1), while BOTH evidence refs are usable (C2 continuity).
+  const generation = generationFromBus(h);
+  assert.equal(generation, 1);
+  assert.ok(
+    h.busLog.some(
+      (e) =>
+        e.channel === "pinx.activity" &&
+        (e.payload as { summary?: string }).summary?.includes("2 evidence refs"),
+    ),
+    "both evidence refs usable",
+  );
+  h.cleanup();
+});
+
+test("[C16] checkpoint never claims evidence that was not persisted (invariant over replay)", () => {
+  const h = harness();
+  const branch = [
+    {
+      type: "custom",
+      id: "c0",
+      customType: STACK_INFO.customTypes.generation,
+      data: checkpoint({ generation: 2, sessionId: h.sessionId, evidenceIds: ["ev_missing"] }),
+    },
+    // evidence entry for ev_missing is ABSENT (the impossible state under
+    // the fixed ordering; replay must not resurrect it as usable).
+  ];
+  h.setSessionFixture(branch);
+  const { checkpoint: cp } = restoreCheckpoint(
+    branch,
+    { sessionId: h.sessionId, provider: "intern", model: "glm-5.3" },
+    CT,
+  );
+  assert.equal(cp!.generation, 2);
+  const resolvable = branch.filter(
+    (e) =>
+      e.customType === STACK_INFO.customTypes.evidence &&
+      (e.data as { ref?: { id: string } }).ref?.id === "ev_missing",
+  );
+  assert.equal(resolvable.length, 0);
+  h.cleanup();
+});
