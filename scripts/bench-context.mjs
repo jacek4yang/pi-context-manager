@@ -28,7 +28,7 @@ for (let i = 0; i < TURNS; i++) entries.push({ entryId: `e${i}`, chars: OUTPUT_C
 // Hygiene ON: archive everything older than the window (all but the newest).
 const dir = mkdtempSync(join(tmpdir(), "pinx-bench-"));
 const store = new EvidenceStore(dir);
-const candidates = entries.slice(0, TURNS - 1).map((e, i) => ({
+const candidates = entries.slice(0, TURNS - 1).map((e) => ({
   item: { entryId: e.entryId, role: "toolResult", toolName: "grep", chars: OUTPUT_CHARS, ts: NOW - 120_000, isError: false },
   content: "x".repeat(OUTPUT_CHARS),
 }));
