@@ -34,10 +34,17 @@ const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export class EvidenceStore {
   private root: string;
   private maxBytes: number;
+  /** Ref id generator. Random by default; injectable ONLY so benchmarks and
+   * determinism tests can fix identity — production always uses randomUUID. */
+  private newId: () => string;
 
-  constructor(rootDir: string, opts?: { maxBytes?: number }) {
+  constructor(
+    rootDir: string,
+    opts?: { maxBytes?: number; idFactory?: () => string },
+  ) {
     this.root = resolve(rootDir);
     this.maxBytes = opts?.maxBytes ?? MAX_EVIDENCE_BYTES;
+    this.newId = opts?.idFactory ?? (() => `ev_${randomUUID().replace(/-/g, "")}`);
   }
 
   async put(input: PutInput): Promise<EvidenceRef> {
@@ -48,7 +55,7 @@ export class EvidenceStore {
     if (bytes > this.maxBytes) {
       throw new EvidenceError(`evidence exceeds quota (${bytes} > ${this.maxBytes} bytes)`);
     }
-    const id = `ev_${randomUUID().replace(/-/g, "")}`;
+    const id = this.newId();
     const dir = join(this.root, input.sessionId);
     const sha256 = createHash("sha256").update(input.content, "utf8").digest("hex");
     const ref: EvidenceRef = {
