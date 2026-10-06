@@ -94,13 +94,11 @@ async function scenarioA(): Promise<ScenarioResult> {
   }
 
   const serialized: string[] = [];
-  let toolCalls = 0;
   let toolResultOriginalBytes = 0;
   for (let t = 0; t < turns.length; t++) {
     for (const message of turnMessages(turns[t]!, `call_a${t}`)) {
       sm.appendMessage(message as never);
     }
-    toolCalls++;
     toolResultOriginalBytes += Buffer.byteLength(turns[t]!.toolOutput, "utf8");
     serialized.push(projectionBytes(sm).json);
   }
@@ -112,8 +110,7 @@ async function scenarioA(): Promise<ScenarioResult> {
   const series = compareProjectionSeries(serialized);
   return {
     scenario: "A",
-    description:
-      "six consecutive coding turns; small per-turn outputs below the archive threshold",
+    description: "six consecutive coding turns; small per-turn outputs below the archive threshold",
     turns: turns.length,
     projections,
     consecutive: {
@@ -194,15 +191,15 @@ async function scenarioB(): Promise<ScenarioResult> {
       throw new Error(`scenario B expected exactly one archive, got ${plan.entries.length}`);
     }
     const entry = plan.entries[0]!;
-    sm.appendContextEdit(
-      entry.targetId,
-      { content: [{ type: "text", text: entry.replacement }] } as never,
-    );
+    sm.appendContextEdit(entry.targetId, {
+      content: [{ type: "text", text: entry.replacement }],
+    } as never);
     const after = projectionBytes(sm);
 
     // Evidence integrity: the archived bytes must verify and match exactly.
     const recalled = await store.get(entry.ref, { sessionId: SESSION_ID });
-    const recallMatches = createHash("sha256").update(recalled, "utf8").digest("hex") ===
+    const recallMatches =
+      createHash("sha256").update(recalled, "utf8").digest("hex") ===
       createHash("sha256").update(output, "utf8").digest("hex");
     const markerParses = parseMarker(entry.replacement.split("\n")[0] ?? "");
 
@@ -241,7 +238,7 @@ async function scenarioB(): Promise<ScenarioResult> {
         markerParses: markerParses !== undefined,
         markerFormat: entry.replacement.split("\n")[0],
         markerHeadPreviewBytes: Buffer.byteLength(
-          (entry.replacement.split("\n").slice(1).join("\n") ?? ""),
+          entry.replacement.split("\n").slice(1).join("\n") ?? "",
           "utf8",
         ),
       },
@@ -326,19 +323,26 @@ function toolSchemaFootprint(): Record<string, unknown> {
   };
   const schemaBytes = Buffer.byteLength(JSON.stringify(recall.parameters) ?? "", "utf8");
   const descriptionBytes = Buffer.byteLength(recall.description, "utf8");
+  const defaultActive = recall.defaultActive ?? true;
   return {
     tools: [
       {
         name: recall.name,
         exposure: recall.exposure ?? "direct",
-        defaultActive: recall.defaultActive ?? true,
+        defaultActive,
+        // Deterministic activation: recall becomes active exactly when
+        // archived evidence exists (session_start restore or first archive
+        // commit). With no evidence there is nothing to recall, so a fresh
+        // session exposes no recall schema bytes at all.
+        activationCondition: "evidence refs exist (session_start restore or first archive commit)",
         schemaBytes,
         descriptionBytes,
         totalBytes: schemaBytes + descriptionBytes,
       },
     ],
     totalSchemaBytes: schemaBytes,
-    activeToolCount: 1, // baseline: recall is activated on registration
+    activeToolCount: defaultActive ? 1 : 0, // fresh session: no evidence yet
+    activeToolCountWithEvidence: 1,
   };
 }
 

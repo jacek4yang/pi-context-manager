@@ -62,6 +62,8 @@ export function createMockPiCm(sessionId?: string) {
     messages: Array<unknown>;
   } = { entries: [], messages: [] };
   let modelOverride: MockModel | undefined;
+  const registeredTools: string[] = [];
+  const activeToolCalls: string[][] = [];
 
   const makeCtx = (over: Partial<MockCtx> = {}): MockCtx => ({
     sessionManager: {
@@ -88,7 +90,9 @@ export function createMockPiCm(sessionId?: string) {
       handlers.set(event, list);
       return () => {};
     },
-    registerTool: () => {},
+    registerTool: (tool: { name?: string }) => {
+      registeredTools.push(tool?.name ?? "<unnamed>");
+    },
     registerCommand: () => {},
     appendEntry: (customType: string, data: unknown) => {
       appendedEntries.push({ customType, data });
@@ -96,6 +100,10 @@ export function createMockPiCm(sessionId?: string) {
     sendMessage: () => {},
     getSettings: () => ({}),
     getActiveTools: () => tools,
+    setActiveTools: (names: string[]) => {
+      activeToolCalls.push([...names]);
+      tools = [...names];
+    },
     events: {
       emit: (channel: string, payload: unknown) => {
         busLog.push({ channel, payload });
@@ -120,6 +128,8 @@ export function createMockPiCm(sessionId?: string) {
     busLog,
     appendedEntries,
     notifications,
+    registeredTools,
+    activeToolCalls,
     cleanup: () => rmSync(agentDir, { recursive: true, force: true }),
     setTools: (names: string[]) => {
       tools = names;

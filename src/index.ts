@@ -9,7 +9,7 @@ import { DEFAULT_HYGIENE_POLICY, type ContextItem, type HygienePolicy } from "./
 import type { EvidenceRef } from "./core/evidence.ts";
 import { EvidenceStore } from "./evidence/store.ts";
 import { planHygiene } from "./hygiene/hygiene.ts";
-import { createRecallTool } from "./recall/tool.ts";
+import { createRecallTool, RECALL_TOOL_NAME } from "./recall/tool.ts";
 import { restoreCheckpoint, type CheckpointData } from "./continuity/checkpoint.ts";
 import { DeterministicEngine } from "./engines/deterministic.ts";
 import { CompactionCancelled, EngineSelector, NoEngineError } from "./engines/selector.ts";
@@ -46,6 +46,37 @@ export default function piContextManager(pi: ExtensionAPI) {
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
+
+  /**
+   * Deterministic loadout discipline (cacheability phase): pinx_recall is
+   * registered defaultActive:false and activated exactly when evidence
+   * exists — at session_start when archived refs were restored, and at
+   * turn_end after an archive commit. With no evidence there is nothing to
+   * recall, so fresh sessions carry no recall schema bytes in the
+   * model-visible tool block. Fail-safe: an activation failure is logged
+   * and retried at the next turn boundary; recall is never needed before
+   * evidence exists. PINX_RECALL_ALWAYS=1 keeps it always active instead.
+   */
+  function activateRecall(pi: ExtensionAPI): void {
+    if (refsById.size === 0 && process.env.PINX_RECALL_ALWAYS !== "1") return;
+    try {
+      const active = pi.getActiveTools();
+      if (!active.includes(RECALL_TOOL_NAME)) {
+        pi.setActiveTools([...active, RECALL_TOOL_NAME]);
+      }
+    } catch (error) {
+      try {
+        pi.events.emit("pinx.activity", {
+          v: 1,
+          kind: "context.recall-activation",
+          summary: `recall activation failed: ${(error as Error).message}`,
+          ts: Date.now(),
+        });
+      } catch {
+        // observability is best-effort
+      }
+    }
+  }
   const policy: HygienePolicy = {
     ...DEFAULT_HYGIENE_POLICY,
     recentWindowMs: process.env.PINX_HYGIENE_RECENT_MS
@@ -106,6 +137,7 @@ export default function piContextManager(pi: ExtensionAPI) {
       generation = 0;
       generationIdentity = undefined;
     }
+    activateRecall(pi);
   });
 
   pi.on("turn_end", async (_event, ctx) => {
@@ -124,10 +156,16 @@ export default function piContextManager(pi: ExtensionAPI) {
         v: 1,
         kind: "context.archived",
         summary: `Archived ${entry.toolName} output · ${entry.chars} chars`,
-        detail: { chars: entry.chars, ref: entry.ref.id, entryId: entry.targetId },
+        detail: {
+          chars: entry.chars,
+          modelVisibleChars: entry.replacement.length,
+          ref: entry.ref.id,
+          entryId: entry.targetId,
+        },
         ts: Date.now(),
       });
     }
+    activateRecall(pi);
     generation++;
     generationIdentity = ctx.model
       ? { provider: ctx.model.provider, model: ctx.model.id }

@@ -97,6 +97,7 @@ test("[C7] evidence write failure aborts the whole batch (C7)", async () => {
     category: "tool-result" as const,
     disposition: "eligible" as const,
     reason: "test",
+    workingSet: "archivable" as const,
   });
   const candidates = [candidate("e1", "grep", 9000), candidate("e2", "grep", 9000)];
   // One failed archive aborts everything; nothing is partially planned.

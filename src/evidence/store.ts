@@ -38,10 +38,7 @@ export class EvidenceStore {
    * determinism tests can fix identity — production always uses randomUUID. */
   private newId: () => string;
 
-  constructor(
-    rootDir: string,
-    opts?: { maxBytes?: number; idFactory?: () => string },
-  ) {
+  constructor(rootDir: string, opts?: { maxBytes?: number; idFactory?: () => string }) {
     this.root = resolve(rootDir);
     this.maxBytes = opts?.maxBytes ?? MAX_EVIDENCE_BYTES;
     this.newId = opts?.idFactory ?? (() => `ev_${randomUUID().replace(/-/g, "")}`);

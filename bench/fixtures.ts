@@ -46,9 +46,7 @@ export function turnMessages(turn: FixtureTurn, callId: string): unknown[] {
     { role: "user", content: turn.user, timestamp: ts() },
     {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: callId, name: turn.toolName, arguments: turn.toolArgs },
-      ],
+      content: [{ type: "toolCall", id: callId, name: turn.toolName, arguments: turn.toolArgs }],
       api: "openai-completions",
       provider: "bench",
       model: "bench-deterministic",

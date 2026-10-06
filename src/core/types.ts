@@ -17,6 +17,21 @@ export type ContextCategory =
 /** Hygiene disposition of one context item (Layer 2 policy). */
 export type Disposition = "protected" | "eligible" | "recoverable";
 
+/**
+ * Active-working-set category (cacheability groundwork, CONTEXT-MODEL.md §cache).
+ * Annotation only in this phase: derived deterministically from the same
+ * metadata that decides the disposition — no model, no behavior change.
+ * Future task-aware policies consume it; today it feeds observability and
+ * the benchmark's classification audit.
+ */
+export type WorkingSet =
+  | "must-keep" // conversation substance, errors, mutations, unknown-unsafe output
+  | "active" // recent successful read-only output inside the recency window
+  | "recent" // reserved: older items recently re-touched (not derivable yet)
+  | "archivable" // old successful read-only output — the primary archive candidate
+  | "summarizable" // reserved: future summarization candidates
+  | "cold-evidence"; // reserved: already archived, retrievable only via recall
+
 export interface ContextItem {
   /** Stable id matching the session entry that owns this message. */
   entryId: string;
@@ -33,6 +48,8 @@ export interface Classification {
   disposition: Disposition;
   /** Why this disposition was chosen — surfaced in observability UI. */
   reason: string;
+  /** Deterministic active-working-set category (annotation; see WorkingSet). */
+  workingSet: WorkingSet;
 }
 
 export interface HygienePolicy {

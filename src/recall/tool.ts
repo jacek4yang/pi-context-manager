@@ -18,9 +18,12 @@ export interface RecallDeps {
 
 const PAGE_BYTES = 32 * 1024;
 
+/** Model-visible tool name; the wiring activates it deterministically. */
+export const RECALL_TOOL_NAME = "pinx_recall";
+
 export function createRecallTool(deps: RecallDeps) {
   return {
-    name: "pinx_recall",
+    name: RECALL_TOOL_NAME,
     label: "Recall archived context",
     description:
       "Retrieve the original content archived by the context manager. " +
@@ -32,6 +35,12 @@ export function createRecallTool(deps: RecallDeps) {
         Type.Number({ description: `Max bytes to return (default ${PAGE_BYTES})` }),
       ),
     }),
+    // Deterministic loadout discipline: recall is useless until evidence
+    // exists, so it is NOT activated on registration. The wiring activates
+    // it exactly when archived refs exist (session_start restore or the
+    // first archive commit) — no capability is ever lost, and fresh
+    // sessions carry no recall schema bytes in the model-visible block.
+    defaultActive: false,
     async execute(_toolCallId: string, params: { ref: string; offset?: number; limit?: number }) {
       const sessionId = deps.sessionId();
       const ref = deps.refs().get(params.ref);
