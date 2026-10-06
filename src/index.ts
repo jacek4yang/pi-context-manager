@@ -5,19 +5,24 @@ import { join } from "node:path";
 import { STACK_INFO } from "./info.ts";
 import { classifyItem } from "./core/classify.ts";
 import { estimateTextTokens, pressure } from "./core/estimate.ts";
-import { DEFAULT_HYGIENE_POLICY, type ContextItem } from "./core/types.ts";
+import { DEFAULT_HYGIENE_POLICY, type ContextItem, type HygienePolicy } from "./core/types.ts";
 import type { EvidenceRef } from "./core/evidence.ts";
 import { EvidenceStore } from "./evidence/store.ts";
 import { planHygiene } from "./hygiene/hygiene.ts";
 import { createRecallTool } from "./recall/tool.ts";
+import { restoreCheckpoint, type CheckpointData } from "./continuity/checkpoint.ts";
+import { DeterministicEngine } from "./engines/deterministic.ts";
+import { CompactionCancelled, EngineSelector, NoEngineError } from "./engines/selector.ts";
+import type { CompactionPlan, RuntimeContext } from "./core/types.ts";
 
 /**
  * pi-context-manager — experimental context management and session continuity.
  *
- * feat/hygiene-recall: deterministic hygiene plans committed as Pi-native
- * context_edit drafts at turn boundaries, a bounded content-verified evidence
- * store, and the pinx_recall retrieval tool. Canonical history is never
- * deleted: originals stay in session JSONL and in the evidence store (C1/C2).
+ * feat/provider-native-engine: pluggable compaction engines behind the
+ * probe→plan→compact contract. The default chain is deterministic (zero-model);
+ * provider-native engines are injected via createProviderNativeEngine and are
+ * never faked — an unsupported probe falls back, an all-engine failure cancels
+ * compaction with state preserved (C8/C9/C10/C11).
  */
 export default function piContextManager(pi: ExtensionAPI) {
   const enabled = process.env.PINX_HYGIENE !== "off";
@@ -25,6 +30,29 @@ export default function piContextManager(pi: ExtensionAPI) {
   const refsById = new Map<string, EvidenceRef>();
   let sessionId = "";
   const archivedEntryIds = new Set<string>();
+  const selector = new EngineSelector([new DeterministicEngine()]);
+  /** Context-management generation: incremented on every committed hygiene
+   * batch; restored from the latest valid checkpoint on reopen (C16). */
+  let generation = 0;
+  /** Provider/model the generation was committed under — a switch
+   * invalidates the restored continuity rather than reusing it blindly. */
+  let generationIdentity: { provider: string; model: string } | undefined;
+  // Policy overrides for demos/tests and explicit operator declarations:
+  //   PINX_HYGIENE_RECENT_MS  — recency window (default 30 min)
+  //   PINX_HYGIENE_ARCHIVABLE — comma list of EXTRA read-only tool names.
+  //     Fail-safe default: unknown tools are never archivable; operators must
+  //     declare third-party read-only tools (e.g. fff's "ffgrep") explicitly.
+  const extraArchivable = (process.env.PINX_HYGIENE_ARCHIVABLE ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const policy: HygienePolicy = {
+    ...DEFAULT_HYGIENE_POLICY,
+    recentWindowMs: process.env.PINX_HYGIENE_RECENT_MS
+      ? Number(process.env.PINX_HYGIENE_RECENT_MS) || DEFAULT_HYGIENE_POLICY.recentWindowMs
+      : DEFAULT_HYGIENE_POLICY.recentWindowMs,
+    archivableTools: new Set([...DEFAULT_HYGIENE_POLICY.archivableTools, ...extraArchivable]),
+  };
 
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId() ?? "";
@@ -32,7 +60,8 @@ export default function piContextManager(pi: ExtensionAPI) {
     archivedEntryIds.clear();
     // Rebuild branch-sensitive state from persisted custom entries only —
     // never by scanning raw history of abandoned branches.
-    for (const entry of ctx.sessionManager.getBranch()) {
+    const branch = ctx.sessionManager.getBranch();
+    for (const entry of branch) {
       if (entry.type === "custom" && entry.customType === STACK_INFO.customTypes.evidence) {
         const ref = (entry.data as { ref?: EvidenceRef } | undefined)?.ref;
         if (ref && ref.v === 1) {
@@ -41,17 +70,80 @@ export default function piContextManager(pi: ExtensionAPI) {
         }
       }
     }
+    // C16: restore continuity generation from the latest VALID checkpoint.
+    // Identity mismatch (provider/model) leaves the generation unset rather
+    // than reusing staged state across switches; corrupt checkpoints fail
+    // closed individually; canonical history is never touched.
+    const identity = {
+      sessionId,
+      provider: ctx.model?.provider,
+      model: ctx.model?.id,
+    };
+    const { checkpoint, skipped } = restoreCheckpoint(
+      branch.map((e) => ({
+        customType: (e as { customType?: string }).customType ?? "",
+        data: (e as { data?: unknown }).data,
+      })),
+      identity,
+      STACK_INFO.customTypes.generation,
+    );
+    void skipped;
+    if (checkpoint) {
+      generation = checkpoint.generation;
+      generationIdentity = { provider: checkpoint.provider ?? "", model: checkpoint.model ?? "" };
+      try {
+        pi.events.emit("pinx.activity", {
+          v: 1,
+          kind: "context.checkpoint",
+          summary: `Continuity restored: generation ${generation}, ${refsById.size} evidence refs`,
+          detail: { generation },
+          ts: Date.now(),
+        });
+      } catch {
+        // observability is best-effort
+      }
+    } else {
+      generation = 0;
+      generationIdentity = undefined;
+    }
   });
 
   pi.on("turn_end", async (_event, ctx) => {
     if (!enabled || !sessionId) return undefined;
     const plan = await buildPlan(ctx.sessionManager);
     if (plan.entries.length === 0) return undefined;
+    // C16 commit ordering: evidence entries are persisted FIRST and the
+    // generation checkpoint LAST — the checkpoint is a commit marker for
+    // state that is already durable. A crash before the checkpoint leaves
+    // generation N-1 in charge, claiming nothing about generation N.
     for (const entry of plan.entries) {
       refsById.set(entry.ref.id, entry.ref);
       archivedEntryIds.add(entry.targetId);
       pi.appendEntry(STACK_INFO.customTypes.evidence, { ref: entry.ref, toolName: entry.toolName });
+      pi.events.emit("pinx.activity", {
+        v: 1,
+        kind: "context.archived",
+        summary: `Archived ${entry.toolName} output · ${entry.chars} chars`,
+        detail: { chars: entry.chars, ref: entry.ref.id, entryId: entry.targetId },
+        ts: Date.now(),
+      });
     }
+    generation++;
+    generationIdentity = ctx.model
+      ? { provider: ctx.model.provider, model: ctx.model.id }
+      : undefined;
+    const checkpoint: CheckpointData = {
+      v: 1,
+      generation,
+      sessionId,
+      atEntryId: ctx.sessionManager.getLeafId() ?? "",
+      provider: ctx.model?.provider,
+      model: ctx.model?.id,
+      evidenceIds: plan.entries.map((e) => e.ref.id),
+      createdAt: new Date().toISOString(),
+    };
+    pi.appendEntry(STACK_INFO.customTypes.generation, checkpoint);
+    emitContextStatus(pi, ctx);
     return {
       entries: plan.entries.map((entry) => ({
         type: "context_edit" as const,
@@ -59,6 +151,73 @@ export default function piContextManager(pi: ExtensionAPI) {
         replacement: { content: [{ type: "text" as const, text: entry.replacement }] },
       })),
     };
+  });
+
+  // Compaction engines (Layer 6). We never fabricate a provider-native
+  // summary: unsupported probes fall back down the chain, and an all-engine
+  // failure cancels compaction with the previous usable state preserved (C8).
+  pi.on("session_before_compact", async (event, ctx) => {
+    if (!enabled || !sessionId) return undefined;
+    const preparation = event.preparation;
+    const input = serializeInput(preparation.messagesToSummarize);
+    const candidates = preparation.messagesToSummarize.map((message, index) => ({
+      entryId: `m${index}`,
+      role: message.role,
+      toolName:
+        message.role === "toolResult" ? (message as { toolName?: string }).toolName : undefined,
+      isError:
+        message.role === "toolResult" ? (message as { isError?: boolean }).isError : undefined,
+      chars: JSON.stringify(message)?.length ?? 0,
+    }));
+    const runtime: RuntimeContext = {
+      sessionId,
+      leafId: ctx.sessionManager.getLeafId() ?? "",
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+      tokensUsed:
+        ctx.getContextUsage()?.tokens != null
+          ? { value: ctx.getContextUsage()!.tokens!, source: "provider-reported" }
+          : undefined,
+      contextWindow: ctx.getContextUsage()?.contextWindow,
+      signal: event.signal,
+    };
+    try {
+      const outcome = await selector.run(
+        runtime,
+        candidates,
+        input,
+        preparation.firstKeptEntryId,
+        event.signal,
+      );
+      return {
+        compaction: {
+          summary: outcome.result.summary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: {
+            engine: outcome.result.engine,
+            attempts: outcome.attempts,
+            nativeCheckpoint: outcome.result.details.nativeCheckpoint,
+          },
+        },
+      };
+    } catch (error) {
+      const reason =
+        error instanceof CompactionCancelled
+          ? "cancelled"
+          : error instanceof NoEngineError
+            ? "all engines failed"
+            : "engine error";
+      pi.appendEntry(STACK_INFO.customTypes.summary, {
+        kind: "compaction-failed",
+        reason,
+        detail: (error as Error).message,
+      });
+      await ctx.ui.notify(
+        `context-manager: compaction cancelled (${reason}); previous context preserved`,
+        "warning",
+      );
+      return { cancel: true };
+    }
   });
 
   pi.registerTool(
@@ -97,6 +256,7 @@ export default function piContextManager(pi: ExtensionAPI) {
           `pi-context-manager ${STACK_INFO.contractVersion} · recover before summarize, summarize before discard`,
           `messages: ${items.length} · ~${est.value} tokens (estimated)${ratio !== undefined ? ` · pressure ${(ratio * 100).toFixed(0)}%` : ""}`,
           `protected ${dispositions.protected} · eligible ${dispositions.eligible} · archived refs ${refsById.size}`,
+          `generation ${generation}${generationIdentity ? ` @ ${generationIdentity.provider}/${generationIdentity.model}` : ""}`,
         ].join("\n"),
         "info",
       );
@@ -108,14 +268,51 @@ export default function piContextManager(pi: ExtensionAPI) {
     const candidates = items
       .filter((item) => item.role === "toolResult" && item.content)
       .map((item) => ({ item, content: item.content! }));
-    return planHygiene(sessionId, candidates, store, DEFAULT_HYGIENE_POLICY);
+    return planHygiene(sessionId, candidates, store, policy);
+  }
+
+  /** Publish the pinx.context.status contract event (CONTRACTS.md §2). */
+  function emitContextStatus(
+    pi: ExtensionAPI,
+    ctx: Parameters<Parameters<ExtensionAPI["on"]>[1]>[1],
+  ): void {
+    try {
+      const projection = ctx.sessionManager.buildSessionProjection();
+      const items = projectionItems(projection);
+      let protectedTokens = 0;
+      let eligibleTokens = 0;
+      for (const item of items) {
+        const tokens = estimateTextTokens(JSON.stringify(item.content ?? "") ?? "").value;
+        if (classifyItem(item).disposition === "protected") protectedTokens += tokens;
+        else eligibleTokens += tokens;
+      }
+      const usage = ctx.getContextUsage();
+      const usedTokens =
+        usage?.tokens != null
+          ? { value: usage.tokens, source: "provider-reported" as const }
+          : { value: protectedTokens + eligibleTokens, source: "estimated" as const };
+      pi.events.emit("pinx.context.status", {
+        v: 1,
+        contextWindow: usage?.contextWindow ?? null,
+        usedTokens,
+        breakdown: [
+          { label: "protected", tokens: protectedTokens, source: "estimated" },
+          { label: "reclaimable", tokens: eligibleTokens, source: "estimated" },
+        ],
+        activeEngine: "deterministic",
+        archivedRefs: refsById.size,
+        generation,
+      });
+    } catch {
+      // Status emission is best-effort and must never break a turn boundary.
+    }
   }
 }
 
 interface ProjectionLike {
   entries: Array<{
     sourceEntry: { id: string };
-    messages: Array<{ role: string; toolName?: string; isError?: boolean }>;
+    messages: Array<{ role: string; toolName?: string; isError?: boolean; timestamp?: number }>;
   }>;
   messages: unknown[];
 }
@@ -124,21 +321,50 @@ interface ItemWithContent extends ContextItem {
   content?: string;
 }
 
+const MAX_INPUT_ITEM_CHARS = 400;
+
+function serializeInput(messages: ReadonlyArray<{ role: string }>): CompactionPlan["input"] {
+  return messages.map((message) => {
+    const text = messageText(message);
+    const bounded =
+      text.length > MAX_INPUT_ITEM_CHARS ? text.slice(0, MAX_INPUT_ITEM_CHARS - 1) + "…" : text;
+    return {
+      role: message.role,
+      toolName:
+        message.role === "toolResult" ? (message as { toolName?: string }).toolName : undefined,
+      isError:
+        message.role === "toolResult" ? (message as { isError?: boolean }).isError : undefined,
+      text: bounded,
+    };
+  });
+}
+
+/** Extract text from any AgentMessage content shape: string, text blocks, or none. */
+function messageText(message: unknown): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) =>
+      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+        ? String((block as { text?: unknown }).text ?? "")
+        : "",
+    )
+    .filter((t) => t.length > 0)
+    .join("\n");
+}
+
 function projectionItems(projection: ProjectionLike): ItemWithContent[] {
   const items: ItemWithContent[] = [];
   for (const projected of projection.entries) {
     for (const message of projected.messages) {
-      const withContent = message as unknown as {
-        content?: Array<{ type: string; text?: string }>;
-      };
-      const textBlocks =
-        withContent.content?.filter((b) => b.type === "text" && typeof b.text === "string") ?? [];
-      const content = textBlocks.map((b) => b.text).join("\n");
+      const content = messageText(message);
       items.push({
         entryId: projected.sourceEntry.id,
         role: message.role,
         toolName: message.toolName,
         isError: message.isError,
+        ts: message.timestamp,
         chars: JSON.stringify(message)?.length ?? 0,
         content,
       });

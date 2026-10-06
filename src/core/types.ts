@@ -80,6 +80,8 @@ export interface ContinuityCheckpoint {
 export interface RuntimeContext {
   /** session id owning the context (provenance scope). */
   sessionId: string;
+  /** Current abort signal, when compaction runs inside a live turn. */
+  signal?: AbortSignal;
   /** Current leaf entry id. */
   leafId: string;
   model: { provider: string; modelId: string } | undefined;
@@ -104,6 +106,10 @@ export interface CompactionPlan {
   tokensBefore: { value: number; source: "provider-reported" | "estimated" };
   /** Prefix-stability annotation (PROVIDER-MODEL.md cache discipline). */
   prefixStable: boolean;
+  /** Bounded serialized content of the summarized span. */
+  input: Array<{ role: string; toolName?: string; isError?: boolean; text: string }>;
+  /** Cancellation for the whole plan/compact lifecycle (C9). */
+  signal?: AbortSignal;
 }
 
 export interface CompactionResult {
@@ -114,6 +120,8 @@ export interface CompactionResult {
     changedFiles?: string[];
     readFiles?: string[];
     batchSummaries?: BatchSummary[];
+    /** Opaque provider-native checkpoint; integrity is the adapter's duty. */
+    nativeCheckpoint?: unknown;
   };
   usage?: { input: number; output: number };
   cancelled?: boolean;
@@ -123,6 +131,6 @@ export interface CompactionResult {
 export interface CompactionEngine {
   readonly id: EngineId;
   probe(ctx: RuntimeContext): CapabilityResult;
-  plan(ctx: RuntimeContext, candidates: ContextItem[]): CompactionPlan;
+  plan(ctx: RuntimeContext, input: CompactionPlan["input"]): CompactionPlan;
   compact(plan: CompactionPlan): Promise<CompactionResult>;
 }

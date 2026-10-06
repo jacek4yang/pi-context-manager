@@ -70,12 +70,12 @@ export class EvidenceStore {
       bytes,
       createdAt: ref.createdAt,
     };
-    await mkdir(dir, { recursive: true });
+    await mkdir(dir, { recursive: true, mode: 0o700 });
     // Atomic: write temp, then rename onto the final names.
     const tmpContent = join(dir, `.${id}.tmp`);
     const tmpSidecar = join(dir, `.${id}.meta.tmp`);
-    await writeFile(tmpContent, input.content, "utf8");
-    await writeFile(tmpSidecar, JSON.stringify(sidecar), "utf8");
+    await writeFile(tmpContent, input.content, { encoding: "utf8", mode: 0o600 });
+    await writeFile(tmpSidecar, JSON.stringify(sidecar), { encoding: "utf8", mode: 0o600 });
     await rename(tmpContent, join(dir, `${id}.bin`));
     await rename(tmpSidecar, join(dir, `${id}.json`));
     return ref;
@@ -115,7 +115,7 @@ export class EvidenceStore {
     }
     let content: string;
     try {
-      content = await readFile(contentPath, "utf8");
+      content = await readFile(contentPath, { encoding: "utf8" });
     } catch {
       throw new EvidenceError("evidence content missing");
     }

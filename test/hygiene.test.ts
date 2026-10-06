@@ -21,7 +21,7 @@ function tempStore(): { store: EvidenceStore; dir: string } {
   return { store: new EvidenceStore(dir), dir };
 }
 
-test("eligible old large outputs produce bounded marker drafts with refs", async () => {
+test("[C15] eligible old large outputs produce bounded marker drafts with refs", async () => {
   const { store, dir } = tempStore();
   try {
     const plan = await planHygiene(
@@ -45,7 +45,7 @@ test("eligible old large outputs produce bounded marker drafts with refs", async
   }
 });
 
-test("protected and small items are skipped with reasons (C5/C6)", async () => {
+test("[C11] protected and small items are skipped with reasons (C5/C6)", async () => {
   const { store, dir } = tempStore();
   try {
     const plan = await planHygiene(
@@ -68,7 +68,7 @@ test("protected and small items are skipped with reasons (C5/C6)", async () => {
   }
 });
 
-test("per-turn edit budget bounds the plan", async () => {
+test("[C15] per-turn edit budget bounds the plan", async () => {
   const { store, dir } = tempStore();
   try {
     const candidates = Array.from({ length: 20 }, (_, i) => candidate(`e${i}`, "ls", 5000));
@@ -87,7 +87,7 @@ test("per-turn edit budget bounds the plan", async () => {
   }
 });
 
-test("evidence write failure aborts the whole batch (C7)", async () => {
+test("[C7] evidence write failure aborts the whole batch (C7)", async () => {
   const failing = {
     put: async () => {
       throw new Error("disk full");

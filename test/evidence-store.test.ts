@@ -17,7 +17,7 @@ function cleanup(dir: string): void {
 
 const CONTENT = "$ npm test\nPASS 143\nFAIL 0\n".repeat(10);
 
-test("put/get roundtrip preserves content and records provenance (C2)", async () => {
+test("[C2] put/get roundtrip preserves content and records provenance (C2)", async () => {
   const { store, dir } = tempStore();
   try {
     const ref = await store.put({
@@ -35,7 +35,7 @@ test("put/get roundtrip preserves content and records provenance (C2)", async ()
   }
 });
 
-test("hash mismatch fails closed (C4/C14)", async () => {
+test("[C14][C4] hash mismatch fails closed (C4/C14)", async () => {
   const { store, dir } = tempStore();
   try {
     const ref = await store.put({
@@ -51,7 +51,7 @@ test("hash mismatch fails closed (C4/C14)", async () => {
   }
 });
 
-test("cross-session retrieval is refused (C3)", async () => {
+test("[C3] cross-session retrieval is refused (C3)", async () => {
   const { store, dir } = tempStore();
   try {
     const ref = await store.put({
@@ -66,7 +66,7 @@ test("cross-session retrieval is refused (C3)", async () => {
   }
 });
 
-test("entryId provenance mismatch fails closed (C3)", async () => {
+test("[C3] entryId provenance mismatch fails closed (C3)", async () => {
   const { store, dir } = tempStore();
   try {
     const ref = await store.put({
@@ -84,7 +84,7 @@ test("entryId provenance mismatch fails closed (C3)", async () => {
   }
 });
 
-test("oversize content is refused, not truncated (C15)", async () => {
+test("[C15] oversize content is refused, not truncated (C15)", async () => {
   const { dir } = tempStore();
   try {
     const tiny = new EvidenceStore(dir, { maxBytes: 10 });
@@ -97,7 +97,7 @@ test("oversize content is refused, not truncated (C15)", async () => {
   }
 });
 
-test("malformed refs fail closed before touching the filesystem", async () => {
+test("[C4] malformed refs fail closed before touching the filesystem", async () => {
   const { store, dir } = tempStore();
   try {
     const evil = {
